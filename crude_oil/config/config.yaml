@@ -1,36 +1,42 @@
-project:
-  name: "energy_fleet_wti_engine"
-  version: "1.0.0"
-  description: "7-Day WTI Crude Oil forecasting using VMD + TFT"
+# crude_oil/config/config.yaml
 
-data_sources:
+project:
+  name: "energy_st_gnn_meta_engine"
+  version: "2.0.0"
+  description: "Probabilistic WTI forecasting via HMM Regimes, Convenience Yield, and Graph Logistics"
+
+# Layer 1: The Physical Graph (Spatial-Temporal Logistics)
+physical_layer:
+  nodes:
+    - "Permian_Basin_USA"      # Supply
+    - "Ghawar_Saudi_Arabia"    # Supply
+    - "Rotterdam_Netherlands"  # Demand/Refining
+    - "Houston_USA"            # Demand/Refining
+  edges:
+    - "Suez_Canal"             # Transit Chokepoint
+    - "Strait_of_Hormuz"       # Transit Chokepoint
+    - "Malacca_Strait"         # Transit Chokepoint
+
+# Layer 2: The Financial Term Structure (Contango/Backwardation)
+financial_layer:
+  yfinance_tickers:
+    wti_front_month: "CL=F"    # Proxy for Spot Price
+    brent_front_month: "BZ=F"  # Used for Brent-WTI Geopolitical Spread
   fred_series:
-    target: "DCOILWTICO"           # WTI Crude Oil Prices (Dollars per Barrel)
-    usd_index: "DTWEXBGS"          # Trade Weighted U.S. Dollar Index (Broad)
-    spr_reserves: "WCSSTUS1"        # US Strategic Petroleum Reserve (Millions of Barrels)
-    
-  # We will build out the AIS and NLP sources in the next steps
-  chokepoints:
-    - "Suez_Canal"
-    - "Strait_of_Hormuz"
+    usd_index: "DTWEXBGS"      # US Dollar Strength
+    risk_free_rate: "DGS3MO"   # 3-Month Treasury Rate (Used for Cost of Carry math)
+
+# Layer 3: Geopolitical Regime Switching
+geopolitical_layer:
+  markov_regimes: 3            # 0: Oversupply/Calm, 1: Demand Shock, 2: Supply/War Shock
   nlp_keywords:
     - "OPEC"
     - "Saudi Aramco"
-    - "EIA Inventory"
+    - "Strategic Petroleum Reserve"
+    - "Sanctions"
 
-vmd_parameters:
-  alpha: 2000       # Bandwidth constraint
-  tau: 0.0          # Noise-tolerance
-  K: 4              # Extract 4 Intrinsic Mode Functions (Macro trend + 3 noise frequencies)
-  DC: 0             # No DC part imposed
-  init: 1           # Initialize omegas uniformly
-  tol: 0.0000001    # Tolerance of convergence
-
-tft_hyperparameters:
-  prediction_horizon: 7            # The 7-Day "Sweet Spot" for EIA digest and physical shipping
-  context_length: 30               # 30-day historical look-back window
-  batch_size: 32
-  learning_rate: 0.01
-  hidden_size: 32
-  attention_head_size: 4
-  quantiles: [0.1, 0.5, 0.9]       # P10 (Floor), P50 (Median), P90 (Ceiling)
+# Layer 4: The Meta-Learner (Probabilistic Distribution)
+meta_learner:
+  prediction_horizon: 14       # 14-day horizon (standard tanker transit time from Middle East to Europe)
+  context_length: 60           # 60-day historical look-back to capture regime shifts
+  quantiles: [0.05, 0.5, 0.95] # 90% Confidence Interval probability matrix

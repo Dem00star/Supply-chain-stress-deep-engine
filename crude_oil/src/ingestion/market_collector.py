@@ -2,77 +2,110 @@ import os
 import yaml
 import logging
 import pandas as pd
+import yfinance as yf
 from fredapi import Fred
-from datetime import datetime, timedelta
+from dotenv import load_dotenv  
 
-# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class EnergyMarketCollector:
+class EnergyCurveCollector:
+    """
+    Ingests WTI, Brent, and Macro rates to calculate the structural
+    forces of the oil market (Spreads and Cost of Carry).
+    """
     def __init__(self):
-        # 1. Load the Energy-Specific Configuration
+        # This resolves to the 'crude_oil/' directory
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        # --- THE FIX: explicitly load the .env from the monorepo root ---
+        monorepo_root = os.path.dirname(self.base_dir)
+        env_path = os.path.join(monorepo_root, '.env')
+        load_dotenv(env_path)
+        # ----------------------------------------------------------------
+        
         config_path = os.path.join(self.base_dir, 'config', 'config.yaml')
         
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
             
-        self.fred_series = self.config['data_sources']['fred_series']
-        
-        # 2. Initialize the FRED API Client
-        # Make sure your .env file in the crude_oil/ root has your FRED_API_KEY
-        self.fred_api_key = os.getenv("FRED_API_KEY")
-        if not self.fred_api_key:
-            logger.warning("FRED_API_KEY not found in environment. Please set it before pulling data.")
-        else:
-            self.fred = Fred(api_key=self.fred_api_key)
-
         self.raw_data_dir = os.path.join(self.base_dir, 'data', 'raw')
-        os.makedirs(self.raw_data_dir, exist_ok=True)
+        self.financial_cfg = self.config['financial_layer']
+        
+        # This will now successfully pull the key from the root folder!
+        self.fred_api_key = os.getenv("FRED_API_KEY")
+        if self.fred_api_key:
+            self.fred = Fred(api_key=self.fred_api_key)
+        else:
+            logger.warning("FRED_API_KEY missing. US Dollar and Treasury yields will be bypassed.")
 
-    def fetch_macro_energy_data(self, lookback_years=5):
-        """Pulls WTI prices, USD strength, and SPR inventory levels."""
-        logger.info("Initializing Energy Macro Data Pull from Federal Reserve...")
+    def fetch_oil_curves(self, start_date="2018-01-01"):
+        logger.info("Pulling Global Oil Benchmarks from yfinance...")
+        tickers = [
+            self.financial_cfg['yfinance_tickers']['wti_front_month'],
+            self.financial_cfg['yfinance_tickers']['brent_front_month']
+        ]
         
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=365 * lookback_years)
+        # Pull futures data
+        df_oil = yf.download(tickers, start=start_date, progress=False)['Close']
         
-        raw_dfs = []
+        # Flatten MultiIndex if necessary and rename
+        if isinstance(df_oil.columns, pd.MultiIndex):
+            df_oil.columns = df_oil.columns.get_level_values(0)
+            
+        df_oil.rename(columns={
+            self.financial_cfg['yfinance_tickers']['wti_front_month']: 'WTI_Spot',
+            self.financial_cfg['yfinance_tickers']['brent_front_month']: 'Brent_Spot'
+        }, inplace=True)
         
-        for name, series_id in self.fred_series.items():
+        df_oil.index = pd.to_datetime(df_oil.index).tz_localize(None)
+        return df_oil
+
+    def fetch_macro_rates(self, start_date="2018-01-01"):
+        logger.info("Pulling Risk-Free Rates and USD Strength from FRED...")
+        if not self.fred_api_key:
+            return pd.DataFrame()
+
+        dfs = []
+        for name, series_id in self.financial_cfg['fred_series'].items():
             try:
-                logger.info(f"Fetching {name} (Series ID: {series_id})...")
-                series_data = self.fred.get_series(series_id, observation_start=start_date, observation_end=end_date)
-                
-                df = pd.DataFrame({'Date': series_data.index, series_id: series_data.values})
+                series_data = self.fred.get_series(series_id, observation_start=start_date)
+                df = pd.DataFrame({'Date': series_data.index, name: series_data.values})
                 df['Date'] = pd.to_datetime(df['Date'])
                 df.set_index('Date', inplace=True)
-                
-                # Forward fill missing weekend data (standard for macro financial trading)
-                df.ffill(inplace=True)
-                raw_dfs.append(df)
-                
+                dfs.append(df)
             except Exception as e:
-                logger.error(f"Failed to fetch {name} ({series_id}): {e}")
+                logger.error(f"Failed to fetch {name}: {e}")
 
-        # Merge all fetched indicators into a single continuous DataFrame
-        if raw_dfs:
-            master_df = pd.concat(raw_dfs, axis=1)
-            master_df.ffill(inplace=True)  # Final sweep for any missing alignment dates
-            master_df.dropna(inplace=True)
-            
-            output_path = os.path.join(self.raw_data_dir, 'market_data_raw.parquet')
-            master_df.to_parquet(output_path)
-            
-            logger.info(f"SUCCESS: Master Energy Macro dataset saved to {output_path}")
-            logger.info(f"Dataset Shape: {master_df.shape}")
-            return master_df
-        else:
-            logger.error("No data was fetched. Check API key and network connection.")
-            return None
+        if dfs:
+            macro_df = pd.concat(dfs, axis=1)
+            macro_df.ffill(inplace=True)
+            return macro_df
+        return pd.DataFrame()
+
+    def build_financial_base(self):
+        logger.info("Constructing Quantitative Financial Base Layer...")
+        
+        oil_df = self.fetch_oil_curves()
+        macro_df = self.fetch_macro_rates()
+        
+        # Merge Oil and Macro
+        master_financial = oil_df.join(macro_df, how='left')
+        master_financial.ffill(inplace=True)
+        master_financial.dropna(inplace=True)
+        
+        # Quantitative Feature: The Brent-WTI Spread
+        # A widening spread indicates US oversupply or Eastern hemisphere geopolitical risk
+        master_financial['Brent_WTI_Spread'] = master_financial['Brent_Spot'] - master_financial['WTI_Spot']
+        
+        output_path = os.path.join(self.raw_data_dir, 'financial_curve_raw.parquet')
+        master_financial.to_parquet(output_path)
+        
+        logger.info(f"SUCCESS: Financial Base Layer saved. Shape: {master_financial.shape}")
+        return master_financial
 
 if __name__ == "__main__":
-    # Test the pipeline locally
-    collector = EnergyMarketCollector()
-    collector.fetch_macro_energy_data()
+    collector = EnergyCurveCollector()
+    df = collector.build_financial_base()
+    print("\nFinancial Base Layer (Spot, Spreads, and Rates):")
+    print(df.tail())

@@ -1,10 +1,8 @@
 import os
-import yaml
-import logging
 import pandas as pd
 import numpy as np
+import logging
 from pytorch_forecasting import TimeSeriesDataSet
-from sklearn.preprocessing import StandardScaler
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -12,82 +10,77 @@ logger = logging.getLogger(__name__)
 class EnergyDatasetBuilder:
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.processed_dir = os.path.join(self.base_dir, "data", "processed")
+        self.data_path = os.path.join(self.base_dir, "data", "processed", "master_feature_set.parquet")
         
-        config_path = os.path.join(self.base_dir, 'config', 'config.yaml')
-        with open(config_path, 'r') as file:
-            self.config = yaml.safe_load(file)
-            
-        self.target = self.config['data_sources']['fred_series']['target']
-        self.max_encoder_length = self.config['tft_hyperparameters']['context_length']
-        self.max_prediction_length = self.config['tft_hyperparameters']['prediction_horizon']
-
-    def prep_dataframe_for_pytorch(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
+    def load_and_prep_data(self):
+        logger.info("Loading Synthesized Master Matrix...")
+        df = pd.read_parquet(self.data_path)
+        
+        # Reset index to make Date a column
+        df = df.reset_index()
+        df = df.rename(columns={'index': 'Date'})
+        
+        # PyTorch Forecasting requires a sequential integer time index and a group ID
         df['time_idx'] = np.arange(len(df))
         df['group_id'] = "energy_market"
         
-        # Categorical features for seasonality
-        df['day_of_week'] = df.index.dayofweek.astype(str).astype("category")
-        df['month'] = df.index.month.astype(str).astype("category")
+        # --- Type Casting for the Neural Network ---
+        # 1. Target and Continuous variables must be floats
+        continuous_cols = [
+            'WTI_Spot', 'Brent_WTI_Spread', 'Suez_Canal_Stress_Idx', 
+            'Strait_of_Hormuz_Stress_Idx', 'Malacca_Strait_Stress_Idx'
+        ]
         
-        # Ensure target is float
-        df[self.target] = df[self.target].astype(float)
-        return df
+        # Safely add FRED macro variables if they successfully downloaded
+        if 'usd_index' in df.columns:
+            continuous_cols.extend(['usd_index', 'risk_free_rate'])
+            
+        for col in continuous_cols:
+            df[col] = df[col].astype(float)
+            
+        # 2. Categoricals must be strings explicitly
+        df['Market_Regime'] = df['Market_Regime'].astype(str).astype('category')
+        df['day_of_week'] = df['Date'].dt.dayofweek.astype(str).astype('category')
+        df['month'] = df['Date'].dt.month.astype(str).astype('category')
+        
+        return df, continuous_cols
 
-    def create_dataset(self):
-        logger.info("Loading master feature set...")
-        data_path = os.path.join(self.processed_dir, "master_feature_set.parquet")
+    def create_dataset(self, df, continuous_cols, max_prediction_length=7, max_encoder_length=60):
+        logger.info("Constructing PyTorch TimeSeriesDataSet...")
         
-        if not os.path.exists(data_path):
-            logger.error("Master dataset not found. Run feature_factory.py first.")
-            return None, None
-            
-        df = pd.read_parquet(data_path)
-        df = self.prep_dataframe_for_pytorch(df)
-        
-        logger.info("Building PyTorch TimeSeriesDataSet for Crude Oil...")
-        
-        # Dynamically grab the VMD columns
-        vmd_cols = [col for col in df.columns if 'mode_' in col]
-        
+        # We hold out the last 30 days for validation
+        training_cutoff = df["time_idx"].max() - 30
+
         training_dataset = TimeSeriesDataSet(
-            df,
+            df[lambda x: x.time_idx <= training_cutoff],
             time_idx="time_idx",
-            target=f"target_{self.max_prediction_length}d_ahead",
+            target="WTI_Spot",
             group_ids=["group_id"],
-            min_encoder_length=self.max_encoder_length,
-            max_encoder_length=self.max_encoder_length,
-            min_prediction_length=self.max_prediction_length,
-            max_prediction_length=self.max_prediction_length,
-            
-            # Static inputs
+            min_encoder_length=max_encoder_length // 2,
+            max_encoder_length=max_encoder_length,
+            min_prediction_length=1,
+            max_prediction_length=max_prediction_length,
             static_categoricals=["group_id"],
-            
-            # Known future inputs (Seasonality)
             time_varying_known_categoricals=["day_of_week", "month"],
-            time_varying_known_reals=["time_idx"],
-            
-            # Unknown future inputs (The specific Energy macro drivers)
-            time_varying_unknown_reals=[
-                self.target, 
-                f"{self.target}_rolling_7d",
-                f"{self.target}_rolling_30d",
-                "DTWEXBGS",                  # US Dollar Strength
-                "WCSSTUS1",                  # US Strategic Petroleum Reserve (Updated!)
-                "sentiment_score",           # OPEC/Middle East Panic Score
-                "Suez_Canal_vessels_waiting",
-                "Strait_of_Hormuz_vessels_waiting"
-            ] + vmd_cols,
-            
+            time_varying_unknown_categoricals=["Market_Regime"], # The HMM Regime
+            time_varying_unknown_reals=continuous_cols,          # Prices, Spreads, and Stress Indexes
             add_relative_time_idx=True,
             add_target_scales=True,
             add_encoder_length=True,
         )
+
+        validation_dataset = TimeSeriesDataSet.from_dataset(
+            training_dataset, 
+            df, 
+            predict=True, 
+            stop_randomization=True
+        )
         
-        logger.info("Dataset successfully built!")
-        return training_dataset, df
+        logger.info(f"Training parameters established. Encoder: {max_encoder_length} days, Horizon: {max_prediction_length} days.")
+        return training_dataset, validation_dataset
 
 if __name__ == "__main__":
     builder = EnergyDatasetBuilder()
-    ts_dataset, raw_df = builder.create_dataset()
+    df, cols = builder.load_and_prep_data()
+    train, val = builder.create_dataset(df, cols)
+    print("Dataset construction successful.")

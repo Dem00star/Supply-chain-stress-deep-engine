@@ -1,110 +1,157 @@
-import os
 import streamlit as st
 import pandas as pd
-import requests
 import plotly.graph_objects as go
-from datetime import timedelta
+from datetime import datetime, timedelta
+import os
+import torch
+from pytorch_forecasting import TemporalFusionTransformer
+import warnings
+warnings.filterwarnings('ignore')
 
-# 1. Page Configuration
 st.set_page_config(page_title="Energy Fleet Stress Engine", page_icon="🛢️", layout="wide")
 
-# 2. Paths and Endpoints
-base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-data_path = os.path.join(base_dir, "data", "processed", "master_feature_set.parquet")
-API_URL = "http://127.0.0.1:8000/predict"
-
-# --- UI Header ---
-st.title("🛢️ Energy Fleet Stress Engine")
 st.markdown("""
-**Asset Class:** WTI Crude Oil | **Forecast Horizon:** 7 Days  
-*Powered by Deep Sequence Modeling (PyTorch TFT), Suez/Hormuz Vessel Tracking, and OPEC NLP Sentiment.*
-""")
-st.divider()
+    <style>
+    .main {background-color: #0E1117;}
+    h1, h2, h3, h4 {color: #FAFAFA;}
+    .metric-card {
+        background-color: #1E2127; padding: 20px; border-radius: 10px;
+        border-left: 5px solid #FF5252; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- Backend Communication ---
-@st.cache_data(ttl=3600) # Cache for 1 hour to keep UI lightning fast
-def load_historical_data():
-    if os.path.exists(data_path):
-        df = pd.read_parquet(data_path)
-        # Grab the last 30 days for context
-        return df[['DCOILWTICO']].tail(30)
-    return pd.DataFrame()
-
-def fetch_prediction():
+@st.cache_resource
+def load_production_model():
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    model_path = os.path.join(base_dir, "models", "best_energy_tft_model.ckpt")
+    if not os.path.exists(model_path): return None
     try:
-        response = requests.post(API_URL)
-        if response.status_code == 200:
-            return response.json()
-    except requests.exceptions.ConnectionError:
-        st.error("API Connection Error. Is the FastAPI backend running?")
-    return None
+        model = TemporalFusionTransformer.load_from_checkpoint(model_path, map_location=torch.device('cpu'))
+        model.eval()
+        return model
+    except Exception as e:
+        st.error(f"Failed to load PyTorch model: {e}")
+        return None
 
-# --- Main Dashboard Logic ---
-hist_df = load_historical_data()
-forecast_data = fetch_prediction()
+@st.cache_data
+def load_data():
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    data_path = os.path.join(base_dir, "data", "processed", "master_feature_set.parquet")
+    if not os.path.exists(data_path): return None
+    return pd.read_parquet(data_path)
 
-if forecast_data and not hist_df.empty:
+def prep_dataframe(df, trained_model):
+    import numpy as np
+    df = df.copy()
+    if df.index.name == 'Date' or 'Date' not in df.columns:
+        df = df.reset_index()
     
-    # Extract prediction data
-    median_price = forecast_data["predictions"]["median_expected_price"]
-    p10_floor = forecast_data["confidence_intervals"]["p10_pessimistic_floor"][0]
-    p90_ceiling = forecast_data["confidence_intervals"]["p90_optimistic_ceiling"][0]
+    df['time_idx'] = np.arange(len(df))
+    try:
+        encoder = trained_model.dataset_parameters['categorical_encoders']['group_id']
+        valid_categories = list(encoder.classes_.keys())
+        df['group_id'] = valid_categories[0]
+    except Exception:
+        df['group_id'] = "energy_market" 
     
-    # Calculate future dates
-    last_date = hist_df.index[-1]
-    future_date = last_date + timedelta(days=7)
-    
-    # 3. Top Level KPIs (Executive Summary)
-    col1, col2, col3 = st.columns(3)
-    col1.metric("P10 Risk Floor", f"${p10_floor:.2f}", delta="High Supply / Calm", delta_color="inverse")
-    col2.metric("Median Forecast (Day 7)", f"${median_price:.2f}", delta="Expected Trajectory", delta_color="off")
-    col3.metric("P90 Risk Ceiling", f"${p90_ceiling:.2f}", delta="Supply Shock / Panic", delta_color="normal")
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # 4. The Confidence Cone (Plotly Visual Engine)
-    fig = go.Figure()
+    # Ensure all categoricals are explicitly cast
+    df['Market_Regime'] = df['Market_Regime'].astype(str).astype('category')
+    df['day_of_week'] = df['Date'].dt.dayofweek.astype(str).astype("category")
+    df['month'] = df['Date'].dt.month.astype(str).astype("category")
+    df['WTI_Spot'] = df['WTI_Spot'].astype(float)
+    return df
 
-    # Plot historical reality
-    fig.add_trace(go.Scatter(
-        x=hist_df.index, y=hist_df['DCOILWTICO'],
-        mode='lines', name='Historical WTI Price',
-        line=dict(color='white', width=2)
-    ))
+st.title("🛢️ Global Energy Meta-Learner")
+st.markdown("**Asset Class:** WTI Crude Oil | **Forecast Horizon:** 14 Days")
+st.markdown("*Probabilistic forecasting via Hidden Markov Regimes, Convenience Yield, and Spatial-Temporal Graph Networks.*")
+st.markdown("---")
 
-    # Plot the P90 Ceiling (Upper Bound)
-    fig.add_trace(go.Scatter(
-        x=[last_date, future_date], y=[hist_df['DCOILWTICO'].iloc[-1], p90_ceiling],
-        mode='lines', line=dict(width=0), showlegend=False, name='Upper Bound'
-    ))
+model = load_production_model()
+raw_data = load_data()
 
-    # Plot the P10 Floor (Lower Bound) - fill to the P90 line to create the cone
-    fig.add_trace(go.Scatter(
-        x=[last_date, future_date], y=[hist_df['DCOILWTICO'].iloc[-1], p10_floor],
-        mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 65, 54, 0.2)', 
-        name='80% Confidence Interval (P10-P90)'
-    ))
-
-    # Plot the Median Prediction
-    fig.add_trace(go.Scatter(
-        x=[last_date, future_date], y=[hist_df['DCOILWTICO'].iloc[-1], median_price],
-        mode='lines', name='Median Forecast',
-        line=dict(color='red', width=2, dash='dash')
-    ))
-
-    fig.update_layout(
-        title="WTI Crude Oil 7-Day Forecast Trajectory",
-        xaxis_title="Timeline",
-        yaxis_title="Price per Barrel ($)",
-        template="plotly_dark",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Footer
-    st.caption(f"Last API Sync: {last_date.strftime('%Y-%m-%d')} | Engine: PyTorch Forecasting | Backend: FastAPI")
-    
+if model is None or raw_data is None:
+    st.error("System initializing or missing model/data files.")
 else:
-    st.warning("Awaiting data connection... Please ensure both the dataset exists and the FastAPI backend is running.")
+    with st.spinner('Calculating Geopolitical Energy Trajectories...'):
+        try:
+            prepped_df = prep_dataframe(raw_data, model)
+            
+            # --- Extract Current State Variables ---
+            current_regime = prepped_df['Market_Regime'].iloc[-1]
+            regime_label = "Panic / Shock" if current_regime == "1" else ("Calm / Bull" if current_regime == "0" else "Volatile / Bear")
+            regime_color = "#FF5252" if current_regime == "1" else "#00E676"
+            
+            suez_stress = prepped_df['Suez_Canal_Stress_Idx'].iloc[-1]
+            brent_spread = prepped_df['Brent_WTI_Spread'].iloc[-1]
+            
+            # --- System State Dashboard ---
+            st.subheader("🌍 Live Global State Variables")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown(f"""<div class="metric-card" style="border-left-color: {regime_color};"><h3>Geopolitical Regime (HMM)</h3><h2 style="color: {regime_color};">{regime_label}</h2></div>""", unsafe_allow_html=True)
+            with c2:
+                st.markdown(f"""<div class="metric-card" style="border-left-color: #29B6F6;"><h3>Suez Canal Stress Index</h3><h2>{suez_stress:.2f}x Normal</h2></div>""", unsafe_allow_html=True)
+            with c3:
+                st.markdown(f"""<div class="metric-card" style="border-left-color: #FFCA28;"><h3>Brent-WTI Premium</h3><h2>${brent_spread:.2f}</h2></div>""", unsafe_allow_html=True)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # --- Inference Execution ---
+            last_time_idx = prepped_df['time_idx'].max()
+            future_df = prepped_df.iloc[-1:].copy()
+            future_df['time_idx'] = last_time_idx + 1
+            prediction_df = pd.concat([prepped_df, future_df], ignore_index=True)
+            
+            raw_predictions = model.predict(prediction_df, mode="quantiles", return_x=False)
+            preds_list = raw_predictions[0][0].tolist() 
+            
+            p10, median, p90 = round(preds_list[0], 2), round(preds_list[1], 2), round(preds_list[2], 2)
+            forecast_horizon = 14 
+            
+            # --- Price Forecast ---
+            st.subheader(f"📊 {forecast_horizon}-Day Probabilistic Forecast")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="P10 Risk Floor", value=f"${p10}")
+            with col2:
+                st.metric(label="Median Expected", value=f"${median}")
+            with col3:
+                st.metric(label="P90 Risk Ceiling", value=f"${p90}")
+
+            # --- Charting ---
+            fig = go.Figure()
+            historical_df = prepped_df.tail(45)
+            
+            fig.add_trace(go.Scatter(
+                x=historical_df['Date'], y=historical_df['WTI_Spot'],
+                mode='lines', name='Historical WTI Spot', line=dict(color='white', width=2)
+            ))
+
+            last_date = historical_df['Date'].iloc[-1]
+            future_date = last_date + timedelta(days=forecast_horizon)
+            last_price = historical_df['WTI_Spot'].iloc[-1]
+
+            fig.add_trace(go.Scatter(
+                x=[last_date, future_date, future_date, last_date],
+                y=[last_price, p90, p10, last_price],
+                fill='toself', fillcolor='rgba(255, 82, 82, 0.2)', line=dict(color='rgba(255,255,255,0)'),
+                name='80% Confidence Interval'
+            ))
+
+            fig.add_trace(go.Scatter(
+                x=[last_date, future_date], y=[last_price, median],
+                mode='lines+markers', line=dict(color='#FF5252', width=4, dash='dot'),
+                marker=dict(size=10, symbol='diamond'), name='Median AI Forecast'
+            ))
+
+            fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#FAFAFA'), xaxis=dict(showgrid=False),
+                yaxis=dict(showgrid=True, gridcolor='#333333', title="Price per Barrel ($)"),
+                hovermode="x unified"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+        except Exception as e:
+            st.error(f"Inference execution failed. Error details: {str(e)}")

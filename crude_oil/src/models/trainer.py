@@ -1,86 +1,88 @@
 import os
-import shutil
 import logging
+import warnings
 import torch
-import yaml
-from datetime import datetime
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_forecasting import TemporalFusionTransformer, QuantileLoss
 from dataset import EnergyDatasetBuilder
-from tft_model import create_tft_model
+
+# Suppress PyTorch Lightning warnings for a clean console
+warnings.filterwarnings("ignore")
+logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class EnergyModelTrainer:
+class ModelTrainer:
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.models_dir = os.path.join(self.base_dir, "models")
-        os.makedirs(self.models_dir, exist_ok=True)
+        self.model_dir = os.path.join(self.base_dir, "models")
+        os.makedirs(self.model_dir, exist_ok=True)
         
-        config_path = os.path.join(self.base_dir, 'config', 'config.yaml')
-        with open(config_path, 'r') as file:
-            self.config = yaml.safe_load(file)
-
-    def run_training(self):
-        logger.info("Starting ML Training Pipeline for Energy Engine...")
+    def train(self):
+        logger.info("Initializing Energy Fleet Meta-Learner (TFT)...")
         
+        # 1. Build DataLoaders
         builder = EnergyDatasetBuilder()
-        training_dataset, raw_df = builder.create_dataset()
-        if not training_dataset: return
+        df, continuous_cols = builder.load_and_prep_data()
+        training_dataset, validation_dataset = builder.create_dataset(df, continuous_cols)
 
-        # Validation Split (Last 10%)
-        validation_split_idx = int(len(raw_df) * 0.90)
-        validation_dataset = training_dataset.from_dataset(
-            training_dataset,
-            raw_df[validation_split_idx:],
-            stop_randomization=True
-        )
-
-        batch_size = self.config['tft_hyperparameters']['batch_size']
+        batch_size = 64
         train_dataloader = training_dataset.to_dataloader(train=True, batch_size=batch_size, num_workers=0)
         val_dataloader = validation_dataset.to_dataloader(train=False, batch_size=batch_size, num_workers=0)
 
-        model = create_tft_model(training_dataset)
+        # 2. Define the Neural Network Architecture
+        tft = TemporalFusionTransformer.from_dataset(
+            training_dataset,
+            learning_rate=0.03,
+            hidden_size=16,
+            attention_head_size=2,
+            dropout=0.1,
+            hidden_continuous_size=8,
+            loss=QuantileLoss([0.1, 0.5, 0.9]), # Predicts Risk Floor, Expected Price, and Risk Ceiling
+            optimizer="Adam"
+        )
 
-        early_stop_callback = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=5, verbose=True, mode="min")
+        # 3. Setup Callbacks (Early Stopping to prevent overfitting)
+        early_stop_callback = EarlyStopping(
+            monitor="val_loss", min_delta=1e-4, patience=5, verbose=False, mode="min"
+        )
+        
         checkpoint_callback = ModelCheckpoint(
-            dirpath=self.models_dir, filename="best_energy_tft_model", monitor="val_loss", mode="min", save_top_k=1
+            dirpath=self.model_dir,
+            filename="best_energy_tft_model",
+            save_top_k=1,
+            monitor="val_loss",
+            mode="min"
         )
 
-        accelerator = "mps" if torch.backends.mps.is_available() else "cpu"
-        logger.info(f"Using compute accelerator: {accelerator.upper()}")
-        
+        # 4. Initialize Cloud-Safe Trainer
+        logger.info("Beginning Deep Learning Optimization Phase (Forced CPU for Cloud Compatibility)...")
         trainer = pl.Trainer(
-            max_epochs=10, 
-            accelerator=accelerator,
-            devices=1,
+            max_epochs=15,
+            accelerator="cpu", # GUARANTEES STREAMLIT COMPATIBILITY
+            enable_model_summary=False,
             callbacks=[early_stop_callback, checkpoint_callback],
-            log_every_n_steps=5
+            logger=False
         )
 
-        logger.info("Commencing Crude Oil model training loop...")
-        trainer.fit(model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+        # 5. Train!
+        trainer.fit(
+            tft,
+            train_dataloaders=train_dataloader,
+            val_dataloaders=val_dataloader,
+        )
         
-        # MLOps: Model Registry Automation
-        best_run_path = checkpoint_callback.best_model_path
-        if best_run_path:
-            archive_dir = os.path.join(self.models_dir, "archive")
-            os.makedirs(archive_dir, exist_ok=True)
-            production_model_path = os.path.join(self.models_dir, "best_energy_tft_model.ckpt")
+        # PyTorch Lightning appends '-v1.ckpt' to the file, let's rename it cleanly
+        ckpt_files = [f for f in os.listdir(self.model_dir) if f.startswith("best_energy_tft_model")]
+        if ckpt_files:
+            latest_ckpt = os.path.join(self.model_dir, ckpt_files[0])
+            clean_ckpt = os.path.join(self.model_dir, "best_energy_tft_model.ckpt")
+            os.replace(latest_ckpt, clean_ckpt)
             
-            if os.path.exists(production_model_path) and best_run_path != production_model_path:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                shutil.move(production_model_path, os.path.join(archive_dir, f"energy_tft_archive_{timestamp}.ckpt"))
-                shutil.copy2(best_run_path, production_model_path)
-                os.remove(best_run_path)
-            elif best_run_path == production_model_path:
-                logger.info(f"SUCCESS: Model saved directly to production -> {production_model_path}")
-        else:
-            logger.warning("Training finished but no best model path was found!")
+        logger.info(f"SUCCESS: Global Energy Model trained and saved to {self.model_dir}/best_energy_tft_model.ckpt")
 
 if __name__ == "__main__":
-    import warnings
-    warnings.filterwarnings("ignore", category=UserWarning)
-    trainer_engine = EnergyModelTrainer()
-    trainer_engine.run_training()
+    trainer = ModelTrainer()
+    trainer.train()
