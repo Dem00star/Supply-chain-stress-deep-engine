@@ -1,0 +1,46 @@
+# ==========================================
+# Supply Chain Stress Engine Configuration
+# ==========================================
+
+project:
+  name: "Global Supply Chain Stress Engine"
+  version: "2.0.0"
+  start_date: "2018-01-01"
+
+paths:
+  raw_data: "data/raw/"
+  processed_data: "data/processed/"
+  models: "models/"
+
+ingestion:
+  market:
+    target_proxy: "HG=F" # Dr. Copper Futures
+    macro_indicators:
+      - "SP500"          # S&P 500 (FRED)
+      - "DCOILWTICO"     # Crude Oil WTI (FRED)
+  
+  ais_ports:
+    - "Shanghai"
+    - "Singapore"
+    - "Rotterdam"
+    - "Santos"
+    - "Newcastle"
+
+  rss_feeds:
+    - "https://www.hellenicshippingnews.com/feed/"
+    - "https://www.supplychainbrain.com/rss"
+
+processing:
+  vmd:
+    K: 4           # Number of Intrinsic Mode Functions to extract
+    alpha: 2000    # Data fidelity constraint
+  
+  transformer_model: "ProsusAI/finbert" # HuggingFace financial NLP model
+
+training:
+  hyperparameters:
+    max_encoder_length: 30   # Look-back window (days)
+    max_prediction_length: 7 # Forecast horizon (days)
+    batch_size: 32
+    learning_rate: 0.03
+    max_epochs: 10

@@ -1,0 +1,16 @@
+streamlit
+requests
+pandas
+plotly
+fastapi
+uvicorn
+pydantic
+torch
+lightning
+pytorch-forecasting
+pandas
+numpy
+pyarrow
+vmdpy
+feedparser
+transformers
