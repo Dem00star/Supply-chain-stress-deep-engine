@@ -1,0 +1,36 @@
+project:
+  name: "energy_fleet_wti_engine"
+  version: "1.0.0"
+  description: "7-Day WTI Crude Oil forecasting using VMD + TFT"
+
+data_sources:
+  fred_series:
+    target: "DCOILWTICO"           # WTI Crude Oil Prices (Dollars per Barrel)
+    usd_index: "DTWEXBGS"          # Trade Weighted U.S. Dollar Index (Broad)
+    spr_reserves: "WCSSTUS1"        # US Strategic Petroleum Reserve (Millions of Barrels)
+    
+  # We will build out the AIS and NLP sources in the next steps
+  chokepoints:
+    - "Suez_Canal"
+    - "Strait_of_Hormuz"
+  nlp_keywords:
+    - "OPEC"
+    - "Saudi Aramco"
+    - "EIA Inventory"
+
+vmd_parameters:
+  alpha: 2000       # Bandwidth constraint
+  tau: 0.0          # Noise-tolerance
+  K: 4              # Extract 4 Intrinsic Mode Functions (Macro trend + 3 noise frequencies)
+  DC: 0             # No DC part imposed
+  init: 1           # Initialize omegas uniformly
+  tol: 0.0000001    # Tolerance of convergence
+
+tft_hyperparameters:
+  prediction_horizon: 7            # The 7-Day "Sweet Spot" for EIA digest and physical shipping
+  context_length: 30               # 30-day historical look-back window
+  batch_size: 32
+  learning_rate: 0.01
+  hidden_size: 32
+  attention_head_size: 4
+  quantiles: [0.1, 0.5, 0.9]       # P10 (Floor), P50 (Median), P90 (Ceiling)
