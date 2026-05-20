@@ -64,16 +64,27 @@ def load_data():
     return df
 
 # --- 3. Prep Data for PyTorch Forecasting ---
-# (We bring over the logic from your CopperDatasetBuilder here so we don't need the external class)
-def prep_dataframe(df):
+def prep_dataframe(df, trained_model):
     import numpy as np
     df = df.copy()
+    
     # Reset index so 'Date' becomes a column if it was the index
     if df.index.name == 'Date' or 'Date' not in df.columns:
         df = df.reset_index()
     
     df['time_idx'] = np.arange(len(df))
-    df['group_id'] = "copper_market"
+    
+    # THE FIX: Safely extract the valid category from the encoder's dictionary keys
+    try:
+        encoder = trained_model.dataset_parameters['categorical_encoders']['group_id']
+        # Extract all known categories from the dictionary keys
+        valid_categories = list(encoder.classes_.keys())
+        # Assign the first valid category found in the model's memory
+        df['group_id'] = valid_categories[0]
+    except Exception as e:
+        import streamlit as st
+        st.warning(f"Warning: Could not extract group_id (Error: {e}). Falling back to '0'.")
+        df['group_id'] = "0"
     
     # Categorical features for seasonality
     df['day_of_week'] = df['Date'].dt.dayofweek.astype(str).astype("category")
@@ -100,7 +111,7 @@ else:
     with st.spinner('Running AI Inference Engine...'):
         try:
             # 1. Prep data format
-            prepped_df = prep_dataframe(raw_data)
+            prepped_df = prep_dataframe(raw_data, model)
             
             # 2. Setup the "dummy future" row that the TFT architecture requires for prediction
             last_time_idx = prepped_df['time_idx'].max()
