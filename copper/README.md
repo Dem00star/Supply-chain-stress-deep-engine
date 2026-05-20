@@ -42,5 +42,4 @@ git clone [https://github.com/Dem00star/supply-chain-stress-deep-engine.git](htt
 cd supply-chain-stress-deep-engine
 conda create -n bdi_engine python=3.12
 conda activate bdi_engine
-pip install -r backend_requirements.txt
-pip install -r frontend_requirements.txt
+pip install -r requirements.txt
