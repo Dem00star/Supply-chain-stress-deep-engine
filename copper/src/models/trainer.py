@@ -64,7 +64,7 @@ class ModelTrainer:
 
         # 6. Configure the Trainer
         # Detect Apple Silicon (MPS) for GPU acceleration, fallback to CPU
-        accelerator = "mps" if torch.backends.mps.is_available() else "cpu"
+        accelerator = "cpu"
         logger.info(f"Using compute accelerator: {accelerator.upper()}")
         
         trainer = pl.Trainer(
