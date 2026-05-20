@@ -39,31 +39,6 @@ build/
 .env.secret
 **/config/.env
 
-# --- Machine Learning Framework Logs & Artifacts ---
-**/lightning_logs/
-**/.lightning_logs/
 catboost_info/
 wandb/
 .tensorboard/
-
-# --- Data Lake Isolation ---
-# We track the code and configuration, never the massive raw datasets or binary dumps.
-**/data/raw/*
-**/data/processed/*
-
-# Exception: Allow tracking of placeholder data templates or READMEs inside data folders if they exist
-!**/data/**/README.md
-!**/data/**/.gitkeep
-
-# --- Model Weights & Checkpoint Registry ---
-# Block all heavy binary models and serialized pickles across all engines to prevent repository bloat.
-**/models/*.ckpt
-**/models/*.pt
-**/models/*.pth
-**/models/*.h5
-**/models/*.pkl
-**/models/archive/
-
-# EXCEPTION: Explicitly allow your production deployment brains to pass through!
-# This lets GitHub see your optimized 'best_tft_model.ckpt' or 'best_energy_tft_model.ckpt'
-!**/models/best_*.ckpt
