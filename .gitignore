@@ -18,15 +18,15 @@ ENV/
 
 # 3. Model Weights & Checkpoints (Too large for GitHub)
 # ------------------------------------------------------------------------------
-*.ckpt
+#*.ckpt
 *.pt
 *.pth
-models/
+#models/
 lightning_logs/
 
 # 4. Data & Logistics Matrices (Keep repo lightweight)
 # ------------------------------------------------------------------------------
-*.parquet
+#*.parquet
 *.csv
 *.gpickle
 data/raw/
