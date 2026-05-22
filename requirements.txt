@@ -15,6 +15,3 @@ vmdpy
 feedparser
 transformers
 torchvision
-hmmlearn 
-joblib
-networkx

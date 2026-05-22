@@ -1,8 +1,61 @@
 # ==============================================================================
-# GLOBAL ROOT .GITIGNORE - SUPPLY CHAIN STRESS DEEP ENGINE
+# GLOBAL SUPPLY CHAIN STRESS ENGINE - .gitignore
 # ==============================================================================
 
-# --- System & IDE Junk ---
+# 1. Security & Environment Variables (CRITICAL)
+# ------------------------------------------------------------------------------
+.env
+.env.*
+*.env
+secrets.toml
+
+# 2. Virtual Environments
+# ------------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# 3. Model Weights & Checkpoints (Too large for GitHub)
+# ------------------------------------------------------------------------------
+*.ckpt
+*.pt
+*.pth
+models/
+lightning_logs/
+
+# 4. Data & Logistics Matrices (Keep repo lightweight)
+# ------------------------------------------------------------------------------
+*.parquet
+*.csv
+*.gpickle
+data/raw/
+data/processed/
+
+# Note: If you want to keep the folder structure but ignore the files inside,
+# you can use the following pattern instead of ignoring the whole folder:
+# data/raw/*
+# !data/raw/.gitkeep
+# data/processed/*
+# !data/processed/.gitkeep
+
+# 5. Python Caches & Bytecode
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 6. Streamlit Cache & Configs
+# ------------------------------------------------------------------------------
+.streamlit/
+!.streamlit/config.toml  # Keep this if you have custom UI theme settings
+
+# 7. OS Generated Files (Mac/Windows)
+# ------------------------------------------------------------------------------
 .DS_Store
 .DS_Store?
 ._*
@@ -10,35 +63,14 @@
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# 8. IDEs & Editors
+# ------------------------------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# --- Python Compiled Caches ---
-**/__pycache__/
-**/*.pyc
-**/*.pyo
-**/*.pyd
-.pytest_cache/
+# 9. Jupyter Notebooks (If you run exploratory data analysis)
+# ------------------------------------------------------------------------------
 .ipynb_checkpoints/
-
-# --- Virtual Environments (Never upload installed libraries) ---
-venv/
-env/
-.env/
-.conda/
-.eggs/
-*.egg-info/
-dist/
-build/
-
-# --- Environment Secrets & Credentials (The Dealbreakers) ---
-.env
-.env.local
-.env.secret
-**/config/.env
-
-catboost_info/
-wandb/
-.tensorboard/
