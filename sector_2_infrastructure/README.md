@@ -78,3 +78,41 @@ sector_2_infrastructure/
             ├── dataset.py         
             ├── trainer.py         
             └── app.py
+
+
+## 🚀 Local Development Setup
+
+### 1. Environment Setup
+Create a .env file in the root directory and add your Federal Reserve API key:
+
+Code snippet
+FRED_API_KEY="your_api_key_here"
+Install dependencies:
+
+Bash
+pip install torch lightning pytorch-forecasting pandas yfinance fredapi streamlit plotly
+2. Run the Data Pipeline (In Order)
+First, generate the shared macroeconomic foundation:
+
+Bash
+python sector_2_infrastructure/src/shared_ingestion/macro_collector.py
+Next, synthesize the asset-specific training matrices:
+
+Bash
+python sector_2_infrastructure/src/engines/copper/asset_collector.py
+python sector_2_infrastructure/src/engines/iron_ore/asset_collector.py
+3. Train the Meta-Learners
+Optimize the PyTorch network weights (Restricted to 15 epochs, CPU-safe):
+
+Bash
+python sector_2_infrastructure/src/engines/copper/trainer.py
+python sector_2_infrastructure/src/engines/iron_ore/trainer.py
+4. Launch the Dashboards
+Visualize the live global state and inference trajectories:
+
+Bash
+# Launch Copper Dashboard
+streamlit run sector_2_infrastructure/src/engines/copper/app.py
+
+# Launch Iron Ore Dashboard
+streamlit run sector_2_infrastructure/src/engines/iron_ore/app.py
