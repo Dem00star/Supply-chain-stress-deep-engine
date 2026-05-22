@@ -66,6 +66,14 @@ def prep_dataframe(df, trained_model):
 st.title("⚡ Infrastructure Fleet: Copper Engine")
 st.markdown("**Asset Class:** Global Copper (COMEX) | **Forecast Horizon:** 7 Days")
 st.markdown("*Probabilistic forecasting via Global Mining Equities, Dry Bulk Shipping, and Dollar Liquidity.*")
+
+# --- BIG NAVIGATION BUTTON ---
+st.markdown("<br>", unsafe_allow_html=True)
+st.link_button(
+    "🏗️ Switch to Iron Ore Engine (Sector 2)", 
+    "https://supply-chain-stress-deep-engine-1.streamlit.app/", 
+    use_container_width=True
+)
 st.markdown("---")
 
 model = load_production_model()
